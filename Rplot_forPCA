@@ -1,0 +1,98 @@
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(tibble)
+  library(forcats)
+  library(ggplot2)
+  library(ggrepel)
+})
+
+#' Plot di una PCA (output smartpca) con moderni in trasparenza e antichi evidenziati
+#'
+#' @param evec_file         file .evec di smartpca (prima riga di intestazione saltata)
+#' @param eval_file         file .eval di smartpca (un autovalore per riga)
+#' @param meta_file         tabella metadati: Pop, Group, Color, Symbol (senza intestazione)
+#' @param modern_pops       popolazioni moderne senza suffisso ".HO"
+#' @param highlight_samples campioni antichi da disegnare in primo piano (alpha = 1)
+#' @param label_samples     campioni a cui aggiungere l'etichetta
+#' @param out_file          file di output (es. "PCA.svg"); NULL per non salvare
+#' @return il grafico ggplot (invisibile)
+plot_pca <- function(evec_file,
+                     eval_file,
+                     meta_file,
+                     modern_pops = c("Sardinia", "Italian_Central",
+                                     "Italian_North", "Italian_South"),
+                     highlight_samples = c("CPD175", "CPD176", "BP24", "Bis24", "BP128"),
+                     label_samples = c("CPD175", "CPD176", "BP24", "Bis24", "BP128"),
+                     out_file = "PCA.svg",
+                     width = 7, height = 6, dpi = 600) {
+  
+  ## --- Dati -----------------------------------------------------------
+  pca  <- read_table(evec_file, skip = 1, show_col_types = FALSE,
+                     col_names = c("Sample", paste0("PC", 1:10), "Pop"))
+  meta <- read_table(meta_file, show_col_types = FALSE,
+                     col_names = c("Pop", "Group", "Color", "Symbol"))
+  
+  data_combined <- pca %>%
+    left_join(meta, by = "Pop") %>%
+    filter(!is.na(Group)) %>%
+    arrange(Group) %>%
+    mutate(Group = as_factor(Group))
+  
+  list_colour <- data_combined %>% distinct(Group, Color)  %>% deframe()
+  list_shape  <- data_combined %>% distinct(Group, Symbol) %>% deframe()
+  
+  ## --- Varianza spiegata da PC1 e PC2 ---------------------------------
+  ev      <- scan(eval_file, quiet = TRUE)
+  var_pct <- round(100 * ev / sum(ev), 2)
+  lab_x   <- sprintf("PC1 (%.2f%%)", var_pct[1])
+  lab_y   <- sprintf("PC2 (%.2f%%)", var_pct[2])
+  
+  ## --- Sottoinsiemi ---------------------------------------------------
+  data_modern <- data_combined %>%
+    filter(grepl("\\.HO$", Pop) | Pop %in% modern_pops)
+  data_ancient <- data_combined %>%
+    filter(!Sample %in% data_modern$Sample, !Sample %in% highlight_samples)
+  data_highlight <- data_combined %>% filter(Sample %in% highlight_samples)
+  data_labels    <- data_combined %>% filter(Sample %in% label_samples)
+  
+  ## --- Grafico --------------------------------------------------------
+  p <- ggplot(data_combined, aes(x = PC1, y = PC2)) +
+    geom_point(data = data_modern,
+               aes(color = Group, shape = Group), size = 1.5, alpha = 0.2) +
+    geom_point(data = data_ancient,
+               aes(fill = Group, shape = Group), size = 4, alpha = 0.8, color = "black") +
+    geom_point(data = data_highlight,
+               aes(fill = Group, shape = Group), size = 4, alpha = 1, color = "black") +
+    geom_text_repel(data = data_labels, aes(label = Sample),
+                    size = 4, color = "black", max.overlaps = Inf, force = 8,
+                    family = "sans", fontface = "bold") +
+    scale_colour_manual(values = list_colour) +
+    scale_fill_manual(values = list_colour) +
+    scale_shape_manual(values = list_shape) +
+    guides(fill   = guide_legend(override.aes = list(size = 7)),
+           shape  = guide_legend(override.aes = list(size = 7)),
+           colour = guide_legend(override.aes = list(size = 7))) +
+    labs(x = lab_x, y = lab_y) +
+    theme_classic(base_size = 20) +
+    theme(legend.text = element_text(size = 18),
+          legend.title = element_text(size = 16),
+          legend.position = "none")
+  
+  if (!is.null(out_file)) {
+    ggsave(out_file, plot = p, dpi = dpi, width = width, height = height)
+  }
+  
+  invisible(p)
+}
+
+## Esempio d'uso (eseguito solo con `Rscript pca_plot.R`, non con source())
+if (sys.nframe() == 0) {
+  p <- plot_pca(
+    evec_file = "0iter_modernWEandAncient_evecout.txt",
+    eval_file = "0iter_modernWEandAncient_evalout.txt",
+    meta_file = "poplistforPCA.txt",
+    out_file  = "output/PCA.svg"
+  )
+  print(p)
+}
